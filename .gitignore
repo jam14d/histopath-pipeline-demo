@@ -1,0 +1,96 @@
+
+# Python
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+tf_env/
+*.env
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+coverage.xml
+*.cover
+.cache
+.pytest_cache/
+nosetests.xml
+
+# Logs and debug
+*.log
+*.out
+*.err
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Generated outputs
+outputs/
+results/
+runs/
+artifacts/
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+
+# Data (optional – uncomment if you don’t want to version large sample datasets)
+# data/
+# datasets/
+# tmp/
+# test_images/
+
+
+# Project specific
+
+# ignore any local settings or model weights
+config_local.yaml
+*.h5
+*.pt
+*.pth
+*.onnx
+*.pb
+
+# ignore any custom experiments
+experiments/
+checkpoints/
+logs/
