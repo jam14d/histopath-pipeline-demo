@@ -54,4 +54,4 @@ python -m histopath_pipeline.tissue_pipeline \
     --dir 'PATH' \
     --n_stain_aug 5 \
     --save_dir './output'
-    ```
+```
