@@ -11,7 +11,41 @@ import numpy as np
 
 from .helpers import load_image_bgr, ensure_dir, PreprocessConfig, PipelineConfig
 
+#  HistomicsTK: stain augmentation 
+from histomicstk.preprocessing.augmentation.color_augmentation import (
+    rgb_perturb_stain_concentration,
+)
+
+
+# Stain augmentation module
+
+@dataclass
+class StainAugConfig:
+    n_aug: int = 0                       # how many augmented variants to create per image (0 = off)
+    use_mask_for_stats: bool = True      # exclude background from stain stats if True
+    extra_kwargs: dict | None = None     # pass-through knobs to HTK if desired
+
+
+class StainAugmenter:
+    def __init__(self, cfg: Optional[StainAugConfig] = None) -> None:
+        self.cfg = cfg or StainAugConfig()
+
+    def run(self, img_rgb: np.ndarray, mask_out: Optional[np.ndarray]) -> list[np.ndarray]:
+        """Return a list of augmented RGBs (length = cfg.n_aug)."""
+        if self.cfg.n_aug <= 0:
+            return []
+        kwargs = self.cfg.extra_kwargs or {}
+        # mask_out=True means "ignore these pixels when estimating stats"
+        m = mask_out if self.cfg.use_mask_for_stats else None
+        out: list[np.ndarray] = []
+        for _ in range(self.cfg.n_aug):
+            aug = rgb_perturb_stain_concentration(img_rgb, mask_out=m, **kwargs)
+            out.append(aug.astype(np.uint8))
+        return out
+
+
 # Preprocessing
+
 
 class ImagePreprocessor:
     """Preprocess images (BGR in, grayscale/normalized out)."""
@@ -38,8 +72,8 @@ class ImagePreprocessor:
         return enhanced
 
 
-
 # Segmentation
+
 
 @dataclass
 class SegmentationResult:
@@ -48,10 +82,38 @@ class SegmentationResult:
 
 
 class TissueSegmenter:
-    """Otsu threshold-based tissue/background segmentation."""
+    """Local/Adaptive or Otsu threshold-based tissue/background segmentation."""
+
+    def __init__(
+        self,
+        method: str = "adaptive_gaussian",  # 'adaptive_gaussian' | 'adaptive_mean' | 'otsu'
+        block_size: int = 51,               # odd, >= 3
+        C: int = 5,                         # subtractor; higher -> fewer pixels pass
+        invert: bool = True,                # white mask
+    ) -> None:
+        if block_size % 2 == 0 or block_size < 3:
+            raise ValueError("block_size must be odd and >= 3")
+        self.method = method
+        self.block_size = block_size
+        self.C = C
+        self.invert = invert
+
+    def threshold_adaptive(self, img_gray: np.ndarray) -> np.ndarray:
+        maxval = 255
+        adaptive = (
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C
+            if self.method == "adaptive_gaussian"
+            else cv2.ADAPTIVE_THRESH_MEAN_C
+        )
+        thresh_type = cv2.THRESH_BINARY_INV if self.invert else cv2.THRESH_BINARY
+        mask = cv2.adaptiveThreshold(
+            img_gray, maxval, adaptive, thresh_type, self.block_size, self.C
+        )
+        return mask
 
     def threshold_otsu(self, img_gray: np.ndarray) -> np.ndarray:
-        _t, mask = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        ttype = cv2.THRESH_BINARY_INV if self.invert else cv2.THRESH_BINARY
+        _t, mask = cv2.threshold(img_gray, 0, 255, ttype + cv2.THRESH_OTSU)
         return mask
 
     def find_regions(self, mask: np.ndarray) -> List[np.ndarray]:
@@ -59,15 +121,21 @@ class TissueSegmenter:
         return contours
 
     def segment(self, img_gray: np.ndarray) -> SegmentationResult:
-        mask = self.threshold_otsu(img_gray)
+        if self.method in ("adaptive_gaussian", "adaptive_mean"):
+            mask = self.threshold_adaptive(img_gray)
+        elif self.method == "otsu":
+            mask = self.threshold_otsu(img_gray)
+        else:
+            raise ValueError(f"Unknown method: {self.method}")
         contours = self.find_regions(mask)
         return SegmentationResult(mask=mask, contours=contours)
 
     def overlay(self, img_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        # Bitwise mask; ensure mask is single channel uint8
         return cv2.bitwise_and(img_rgb, img_rgb, mask=mask)
 
-#Visualization
+
+# Visualization
+
 
 class Visualizer:
     @staticmethod
@@ -80,15 +148,6 @@ class Visualizer:
 
     @staticmethod
     def show_side_by_side(images, titles=None, cmap_list=None, figsize=(18, 6)) -> None:
-        """
-        Display multiple images side by side.
-
-        Args:
-            images: list of np.ndarray images (RGB or grayscale)
-            titles: list of titles for each subplot
-            cmap_list: list of colormaps for each image (e.g., 'gray' for grayscale)
-            figsize: tuple defining the figure size
-        """
         n = len(images)
         titles = titles or [f"Image {i+1}" for i in range(n)]
         cmap_list = cmap_list or [None] * n
@@ -98,7 +157,6 @@ class Visualizer:
             axes = [axes]
 
         for ax, img, title, cmap in zip(axes, images, titles, cmap_list):
-            # if a grayscale image comes in without a cmap, default to gray
             if getattr(img, "ndim", 2) == 2 and cmap is None:
                 cmap = "gray"
             ax.imshow(img, cmap=cmap)
@@ -111,60 +169,72 @@ class Visualizer:
 
 # Orchestrator
 
+
 class TissuePipeline:
     """End-to-end orchestration for single images or folders."""
 
-    def __init__(self, config: Optional[PipelineConfig] = None) -> None:
+    def __init__(self, config: Optional[PipelineConfig] = None, stain_aug_cfg: Optional[StainAugConfig] = None) -> None:
         self.config = config or PipelineConfig()
         self.pre = ImagePreprocessor(self.config.preprocess)
         self.segmenter = TissueSegmenter()
         self.viz = Visualizer()
+        self.augmenter = StainAugmenter(stain_aug_cfg or StainAugConfig())
 
     def process_image(self, path: str) -> Tuple[np.ndarray, np.ndarray, SegmentationResult, np.ndarray]:
         # Load & RGB
         img_bgr = load_image_bgr(path)
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-        # Preprocess (gray)
-        gray = self.pre.run(img_bgr)
+        # Rough mask for augmentation stats (exclude background)
+        rough_gray = self.pre.to_gray(img_bgr)
+        rough_mask = self.segmenter.threshold_otsu(rough_gray)  # 0/255
+        mask_out = (rough_mask == 0)  # boolean: True where background
 
-        # Segment
-        seg = self.segmenter.segment(gray)
+        # Generate stain-perturbed variants (RGB)
+        augmented_rgbs = self.augmenter.run(img_rgb, mask_out=mask_out)
 
-        # Overlay
-        overlay = self.segmenter.overlay(img_rgb, seg.mask)
-
-        # Visualize if requested
-        # if self.config.show:
-        #     self.viz.show_image(img_rgb, title="Original (RGB)")
-        #     self.viz.show_gray(gray, title="Preprocessed (Gray)")
-        #     self.viz.show_mask(seg.mask, title="Tissue Mask (Otsu)")
-        #     self.viz.show_image(overlay, title="Overlay (Masked)")
-        if self.config.show:
+        # Optional quick preview when --show and we have at least 1 augmentation
+        if self.config.show and len(augmented_rgbs) > 0:
             self.viz.show_side_by_side(
-            [img_rgb, gray, seg.mask, overlay],
-            titles=["Original (RGB)", "Preprocessed (Gray)", "Tissue Mask (Otsu)", "Overlay (Masked)"],
-            cmap_list=[None, "gray", "gray", None],
-            figsize=(18, 6),
-    )
-    
-        
+                [img_rgb, augmented_rgbs[0]],
+                titles=["Original RGB", "Stain-Augmented RGB (preview)"],
+                cmap_list=[None, None],
+                figsize=(10, 5),
+            )
 
-        # Save artifacts if requested
-        if self.config.save_dir:
-            ensure_dir(self.config.save_dir)
-            base = os.path.splitext(os.path.basename(path))[0]
-            rgb_path = os.path.join(self.config.save_dir, f"{base}_rgb.png")
-            gray_path = os.path.join(self.config.save_dir, f"{base}_gray.png")
-            mask_path = os.path.join(self.config.save_dir, f"{base}_mask.png")
-            over_path = os.path.join(self.config.save_dir, f"{base}_overlay.png")
+        # Variant 0 = original; others = stain-augmented
+        variants = [("orig", img_rgb)] + [(f"aug{i+1}", a) for i, a in enumerate(augmented_rgbs)]
 
-            cv2.imwrite(rgb_path, cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR))
-            cv2.imwrite(gray_path, gray)
-            cv2.imwrite(mask_path, seg.mask)
-            cv2.imwrite(over_path, cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+        # Process each variant end-to-end
+        last = None
+        for tag, rgb in variants:
+            gray = self.pre.run(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            seg = self.segmenter.segment(gray)
+            overlay = self.segmenter.overlay(rgb, seg.mask)
 
-        return img_rgb, gray, seg, overlay
+            # Visualize the first (original) variant if requested
+            if self.config.show and tag == "orig":
+                self.viz.show_side_by_side(
+                    [rgb, gray, seg.mask, overlay],
+                    titles=[f"{tag.upper()} RGB", "Preprocessed (Gray)", "Tissue Mask", "Overlay"],
+                    cmap_list=[None, "gray", "gray", None],
+                    figsize=(18, 6),
+                )
+
+            # Save artifacts if requested
+            if self.config.save_dir:
+                ensure_dir(self.config.save_dir)
+                base = os.path.splitext(os.path.basename(path))[0]
+                suffix = "" if tag == "orig" else f"_{tag}"
+                cv2.imwrite(os.path.join(self.config.save_dir, f"{base}_rgb{suffix}.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(os.path.join(self.config.save_dir, f"{base}_gray{suffix}.png"), gray)
+                cv2.imwrite(os.path.join(self.config.save_dir, f"{base}_mask{suffix}.png"), seg.mask)
+                cv2.imwrite(os.path.join(self.config.save_dir, f"{base}_overlay{suffix}.png"), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+
+            last = (rgb, gray, seg, overlay)
+
+        # Return the last processed variant (keeps API compatible)
+        return last
 
     def process_dir(self, dir_path: str, extensions=(".png", ".jpg", ".jpeg", ".tif", ".tiff")) -> list[str]:
         paths = [
@@ -177,11 +247,11 @@ class TissuePipeline:
         return paths
 
 
-
 # CLI
 
+
 def _build_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Tissue preprocessing & segmentation (OOP)")
+    parser = argparse.ArgumentParser(description="Tissue preprocessing, stain augmentation & segmentation (OOP)")
     parser.add_argument("--image", type=str, help="Path to a single image")
     parser.add_argument("--dir", type=str, help="Path to a directory of images")
     parser.add_argument("--save_dir", type=str, default=None, help="Where to save artifacts")
@@ -189,6 +259,13 @@ def _build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--blur_ksize", type=int, default=5, help="Gaussian blur kernel size (odd)")
     parser.add_argument("--blur_sigma", type=float, default=0.0, help="Gaussian sigma (0 -> auto)")
     parser.add_argument("--no_equalize", action="store_true", help="Disable histogram equalization")
+
+    # stain augmentation controls
+    parser.add_argument("--n_stain_aug", type=int, default=0,
+                        help="Number of stain-perturbed variants to generate per image (0=off)")
+    parser.add_argument("--no_aug_mask_stats", action="store_true",
+                        help="Do NOT exclude background when estimating stain stats for augmentation")
+    # if you want to expose HTK-specific magnitude knobs later, add flags and pass via StainAugConfig.extra_kwargs
     return parser
 
 
@@ -202,7 +279,14 @@ def main() -> None:
         equalize_hist=not args.no_equalize,
     )
     pipe_cfg = PipelineConfig(preprocess=pre_cfg, save_dir=args.save_dir, show=args.show)
-    pipeline = TissuePipeline(pipe_cfg)
+
+    # wire stain augmentation from CLI
+    aug_cfg = StainAugConfig(
+        n_aug=max(0, args.n_stain_aug),
+        use_mask_for_stats=not args.no_aug_mask_stats,
+    )
+
+    pipeline = TissuePipeline(pipe_cfg, stain_aug_cfg=aug_cfg)
 
     if args.image:
         pipeline.process_image(args.image)
