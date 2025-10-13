@@ -17,6 +17,13 @@ This pipeline provides an end-to-end preprocessing and segmentation workflow for
    - Overlay (mask × RGB)  
    - Augmented variants (if enabled)
 
+
+- Each stage of the workflow (preprocessing, segmentation, visualization, augmentation) is encapsulated in its own class, making it easy to maintain or extend individual components without affecting others.
+- Core classes such as `ImagePreprocessor`, `TissueSegmenter`, and `StainAugmenter` can be reused across experiments, notebooks, or larger frameworks without code duplication.
+- Parameters are passed through dataclass-based configurations (`PreprocessConfig`, `PipelineConfig`), allowing clean control over pipeline behavior from the CLI or other scripts.
+- The `TissuePipeline` class orchestrates all modules, making it simple to run the entire workflow on single images or directories with minimal setup.
+- The modular architecture supports easy integration of new preprocessing methods, segmentation algorithms, or post-processing steps in future versions.
+
 ---
 
 ## Dependencies
