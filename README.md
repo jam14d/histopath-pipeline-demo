@@ -1,7 +1,6 @@
 # Histopath Pipeline — Digital Pathology Preprocessing & Stain Augmentation
 
-This pipeline provides an end-to-end preprocessing and segmentation workflow for digital pathology images such as H&E-stained histology slides.  
-It performs realistic stain perturbation augmentation, grayscale preprocessing, and adaptive threshold-based tissue segmentation.
+This pipeline provides an end-to-end preprocessing and segmentation workflow for digital pathology images such as H&E-stained histology slides. It performs realistic stain perturbation augmentation, grayscale preprocessing, and adaptive threshold-based tissue segmentation.
 
 ---
 
