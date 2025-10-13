@@ -28,7 +28,9 @@ except Exception:
     AUG = None
 
 # 1) Data config
-DATA_ROOT  = '/Users/jamieannemortel/Downloads/BreaKHis 400X'      
+#DATA_ROOT  = '/Users/jamieannemortel/Downloads/BreaKHis 400X'   
+DATA_ROOT = "/content/drive/MyDrive/BreaKHis 400X"
+
 TRAIN_DIR  = os.path.join(DATA_ROOT, "train")
 TEST_DIR   = os.path.join(DATA_ROOT, "test")
 
