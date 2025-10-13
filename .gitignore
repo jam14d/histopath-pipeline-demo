@@ -62,6 +62,14 @@ nosetests.xml
 .DS_Store
 Thumbs.db
 
+# Keep the images folder itself
+!images/
+
+# Ignore everything inside images except PNGs
+images/*
+!images/*.png
+
+
 # Generated outputs
 outputs/
 output/

@@ -46,12 +46,12 @@ python -m histopath_pipeline.tissue_pipeline \
     --n_stain_aug 3 \
     --save_dir '/Users/jamieannemortel/Documents/Projects/histopath-pipeline-demo/output' \
     --show
-
-
-## To process a directory
+```
+To process a directory:
 
 ```bash
 python -m histopath_pipeline.tissue_pipeline \
     --dir 'PATH' \
     --n_stain_aug 5 \
     --save_dir './output'
+    ```
