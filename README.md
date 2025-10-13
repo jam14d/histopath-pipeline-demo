@@ -14,6 +14,29 @@ This pipeline provides an end-to-end preprocessing and segmentation workflow for
 
 ---
 
+## Dependencies
+
+Install the required packages before running the pipeline:
+
+```bash
+pip install histomicstk opencv-python matplotlib numpy
+```
+[HistomicsTK](https://digitalslidearchive.github.io/HistomicsTK/) — provides stain normalization and augmentation tools used for simulating realistic histopathology color variation (`rgb_perturb_stain_concentration`).
+This allows the pipeline to create augmented images that mimic real-world staining differences between labs or scanners.
+
+
+OpenCV (cv2) — handles image I/O, color space conversions, blurring, adaptive and Otsu thresholding, contour extraction, and overlay generation.
+It forms the backbone of preprocessing and segmentation.
+
+Matplotlib — handles visualization and side-by-side display.
+
+NumPy — supports fast array operations and numerical processing.
+
+
+
+
+---
+
 ## Example Outputs
 
 Example visualizations are stored in `images/`:
