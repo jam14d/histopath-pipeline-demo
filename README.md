@@ -52,7 +52,7 @@ For each input image, the pipeline performs the following:
 | 2 | Preprocess | Convert to grayscale → blur → (optional) equalize → `*_gray.png` |
 | 3 | Segment | Adaptive or Otsu threshold → binary tissue mask → `*_mask.png` |
 | 4 | Overlay | Apply mask to RGB image → `*_overlay.png` |
-| 5 | (Optional) Stain Augmentation | Generate `n_aug` color-perturbed versions via HistomicsTK → `*_rgb_augN.png` |
+| 5 | Stain Augmentation | Generate `n_aug` color-perturbed versions via HistomicsTK → `*_rgb_augN.png` |
 | 6 | Repeat steps 2–4 for each augmented image | Grayscale, mask, and overlay for every augmented version → `*_gray_augN.png`, `*_mask_augN.png`, `*_overlay_augN.png` |
 
 Final binary masks:  
