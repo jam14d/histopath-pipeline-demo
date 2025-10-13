@@ -67,7 +67,6 @@ outputs/
 results/
 runs/
 artifacts/
-*.png
 *.jpg
 *.jpeg
 *.tif
