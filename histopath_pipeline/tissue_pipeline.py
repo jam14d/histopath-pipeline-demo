@@ -120,6 +120,24 @@ class TissueSegmenter:
         contours, _hier = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         return contours
 
+    # def segment(self, img_gray: np.ndarray) -> SegmentationResult:
+    #     if self.method in ("adaptive_gaussian", "adaptive_mean"):
+    #         mask = self.threshold_adaptive(img_gray)
+    #     elif self.method == "otsu":
+    #         mask = self.threshold_otsu(img_gray)
+    #     else:
+    #         raise ValueError(f"Unknown method: {self.method}")
+    #     contours = self.find_regions(mask)
+    #     return SegmentationResult(mask=mask, contours=contours)
+    
+    # def segment(self, img_gray: np.ndarray) -> SegmentationResult:
+    #     if self.method in ("adaptive_gaussian", "adaptive_mean"):
+    #         mask = self.threshold_adaptive(img_gray)
+    #     elif self.method == "otsu":
+    #         mask = self.threshold_otsu(img_gray)
+    #     else:
+    #         raise ValueError(f"Unknown method: {self.method}")
+
     def segment(self, img_gray: np.ndarray) -> SegmentationResult:
         if self.method in ("adaptive_gaussian", "adaptive_mean"):
             mask = self.threshold_adaptive(img_gray)
@@ -127,15 +145,38 @@ class TissueSegmenter:
             mask = self.threshold_otsu(img_gray)
         else:
             raise ValueError(f"Unknown method: {self.method}")
-        contours = self.find_regions(mask)
-        return SegmentationResult(mask=mask, contours=contours)
+
+        # Cleanup mask
+
+        # Convert to binary 0/1
+        mask_bin = (mask > 0).astype(np.uint8)
+
+        # closing; fill small holes inside tissue
+        kernel_close = np.ones((7, 7), np.uint8)
+        mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_CLOSE, kernel_close)
+
+        # opening; remove small bright noise specks
+        kernel_open = np.ones((5, 5), np.uint8)
+        mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_OPEN, kernel_open)
+
+        # connected-component filtering; remove very small blobs
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_bin, connectivity=8)
+        min_area = 500  # adjust depending on resolution
+        cleaned = np.zeros_like(mask_bin)
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] >= min_area:
+                cleaned[labels == i] = 1
+
+        mask_clean = (cleaned * 255).astype(np.uint8)
+
+        contours = self.find_regions(mask_clean)
+        return SegmentationResult(mask=mask_clean, contours=contours)
 
     def overlay(self, img_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
         return cv2.bitwise_and(img_rgb, img_rgb, mask=mask)
 
 
 # Visualization
-
 
 class Visualizer:
     @staticmethod
@@ -211,6 +252,7 @@ class TissuePipeline:
             gray = self.pre.run(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             seg = self.segmenter.segment(gray)
             overlay = self.segmenter.overlay(rgb, seg.mask)
+
 
             # Visualize the first (original) variant if requested
             if self.config.show and tag == "orig":
