@@ -1,12 +1,16 @@
-
 """
 TensorFlow training demo (Malignant vs Benign) reusing pipeline's stain augmentation.
-Directory layout expected:
+
+Expected layout:
   DATA_ROOT/
     train/{malignant,benign}/*.png
     test/{malignant,benign}/*.png
 
 Validation = the test split (deterministic; no augmentation).
+Notes:
+- Uses EarlyStopping on val_loss with restore_best_weights=True
+- Saves best checkpoint to ./checkpoints/best.keras
+- Smaller shuffle buffer for faster warm-up; optional .repeat()
 """
 
 from __future__ import annotations
@@ -17,7 +21,8 @@ import numpy as np
 import tensorflow as tf
 import cv2
 
-# 0) optional import pipeline stain augmentation
+
+# 0) Optional: pipeline stain augmentation
 
 TRY_HTK = True
 try:
@@ -27,26 +32,33 @@ except Exception:
     TRY_HTK = False
     AUG = None
 
-# 1) Data config
-#DATA_ROOT  = '/Users/jamieannemortel/Downloads/BreaKHis 400X'   
-DATA_ROOT = "/content/drive/MyDrive/BreaKHis 400X"
 
-TRAIN_DIR  = os.path.join(DATA_ROOT, "train")
-TEST_DIR   = os.path.join(DATA_ROOT, "test")
+# 1) Data config
+
+# For Colab + Drive:
+DATA_ROOT = r"/content/drive/MyDrive/BreaKHis 400X"
+# For local dev (uncomment and adjust):
+# DATA_ROOT = r"/Users/jamieannemortel/Downloads/BreaKHis 400X"
+
+TRAIN_DIR = os.path.join(DATA_ROOT, "train")
+TEST_DIR  = os.path.join(DATA_ROOT, "test")
 
 CLASSES = ["malignant", "benign"]
 CLASS_TO_LABEL = {"malignant": 1, "benign": 0}
 
-IMG_SIZE   = (224, 224)
-BATCH_SIZE = 32
-AUTOTUNE   = tf.data.AUTOTUNE
+IMG_SIZE        = (224, 224)
+BATCH_SIZE      = 32
+AUTOTUNE        = tf.data.AUTOTUNE
+N_AUG_TRAIN     = 2   # stain-aug copies per training image (in addition to original)
+N_AUG_TEST      = 0   # keep test deterministic
+USE_REPEAT      = True  # if True, dataset repeats + we set steps_per_epoch
+SHUFFLE_MAXBUF  = 4096  # cap to speed up warm-up; adjust if you have more RAM
 
-# Number of stain-aug copies per training image (in addition to the original)
-N_AUG_TRAIN = 2
-N_AUG_TEST  = 0   # keep test deterministic
+os.makedirs("./checkpoints", exist_ok=True)
 
 
 # 2) Utilities
+
 def collect_pairs(root: str) -> List[Tuple[str, int]]:
     pairs: List[Tuple[str, int]] = []
     for cls in CLASSES:
@@ -57,7 +69,7 @@ def collect_pairs(root: str) -> List[Tuple[str, int]]:
     return pairs
 
 def _load_rgb_numpy(path_tensor, aug_index_tensor, training: bool):
-    """Robust TF→NumPy bridge + optional pipeline stain augmentation."""
+    """TF→NumPy bridge + optional pipeline stain augmentation."""
     # decode path
     if isinstance(path_tensor, (bytes, bytearray)):
         path = path_tensor.decode("utf-8")
@@ -103,8 +115,7 @@ def _map_with_bridge(path: tf.Tensor, label: tf.Tensor, idx: tf.Tensor, training
 
     return rgb, tf.cast(label, tf.int32)
 
-
-def make_dataset(root: str, training: bool) -> tf.data.Dataset:
+def make_dataset(root: str, training: bool):
     pairs = collect_pairs(root)
     if not pairs:
         raise RuntimeError(f"No images found under {root} for classes {CLASSES}")
@@ -125,13 +136,18 @@ def make_dataset(root: str, training: bool) -> tf.data.Dataset:
                 num_parallel_calls=AUTOTUNE)
 
     if training:
-        ds = ds.shuffle(buffer_size=max(2048, len(pairs) * (n_aug + 1)), reshuffle_each_iteration=True)
-        ds = ds.repeat()  # optional if you want steps_per_epoch-driven training
+        # buffer size bounded for faster warm-up
+        est = len(pairs) * (n_aug + 1)
+        buf = min(max(1024, est), SHUFFLE_MAXBUF)
+        ds = ds.shuffle(buffer_size=buf, reshuffle_each_iteration=True)
+        if USE_REPEAT:
+            ds = ds.repeat()
 
     # cache helps a lot when data fits RAM; remove if memory is tight
     ds = ds.cache()
     ds = ds.batch(BATCH_SIZE).prefetch(AUTOTUNE)
     return ds, len(pairs) * (n_aug + 1)
+
 
 # 3) Build datasets
 
@@ -148,7 +164,7 @@ base = tf.keras.applications.MobileNetV2(
 )
 base.trainable = False
 
-inputs = tf.keras.Input(shape=IMG_SIZE + (3,))  # feeding tensors directly (not a dict)
+inputs = tf.keras.Input(shape=IMG_SIZE + (3,))
 x = tf.keras.applications.mobilenet_v2.preprocess_input(inputs)
 x = base(x, training=False)
 x = tf.keras.layers.GlobalAveragePooling2D()(x)
@@ -165,27 +181,50 @@ model.summary()
 
 # 5) Train + evaluate
 
-# If you used ds.repeat() for train, set steps_per_epoch
-steps_per_epoch = max(1, train_len // BATCH_SIZE)
-validation_steps = max(1, test_len // BATCH_SIZE)
+if USE_REPEAT:
+    steps_per_epoch  = max(1, train_len // BATCH_SIZE)
+    validation_steps = max(1, test_len  // BATCH_SIZE)
+else:
+    steps_per_epoch = None
+    validation_steps = None
 
 callbacks = [
     tf.keras.callbacks.ModelCheckpoint(
-        filepath="./checkpoints/mnv2_{epoch:02d}_{val_accuracy:.3f}.keras",
-        monitor="val_accuracy", save_best_only=True),
+        filepath="./checkpoints/best.keras",
+        monitor="val_loss",
+        save_best_only=True,
+        verbose=1,
+    ),
     tf.keras.callbacks.EarlyStopping(
-        monitor="val_accuracy", patience=5, restore_best_weights=True),
+        monitor="val_loss",
+        mode="min",
+        patience=3,
+        restore_best_weights=True,
+        verbose=1,
+    ),
 ]
 
 history = model.fit(
     train_ds,
     epochs=20,
-    steps_per_epoch=steps_per_epoch,     # because train_ds is repeated
+    steps_per_epoch=steps_per_epoch,
     validation_data=test_ds,
     validation_steps=validation_steps,
     callbacks=callbacks,
     verbose=2,
 )
 
-print("\nFinal test evaluation:")
+print("\nFinal test evaluation (best weights already restored if early-stopped):")
 model.evaluate(test_ds, verbose=2)
+
+# Optional: evaluate saved best checkpoint explicitly
+try:
+    best = tf.keras.models.load_model("./checkpoints/best.keras")
+    print("\nReloaded best checkpoint -> test metrics:")
+    best.evaluate(test_ds, verbose=2)
+except Exception:
+    pass
+
+# Quick reminders!@!:
+# - Watch val_loss curve: if it rises while train_loss falls -> overfitting
+# - If both train/val metrics are low -> underfitting (or LR/augs/data issues)
