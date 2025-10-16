@@ -46,7 +46,6 @@ class StainAugmenter:
 
 # Preprocessing
 
-
 class ImagePreprocessor:
     """Preprocess images (BGR in, grayscale/normalized out)."""
 
