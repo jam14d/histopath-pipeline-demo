@@ -1,0 +1,10 @@
+histo/
+  __init__.py
+  cli.py              # parses args; tiny
+  preprocess.py       # ImagePreprocessor
+  tissue.py           # TissueSegmenter (tissue/background only)
+  superpixels.py      # SuperpixelGT (labels/boundaries)
+  cells.py            # CellMaskBuilder (HED+SLIC -> binary cell mask)
+  viz.py              # Visualizer (optional; only used behind --show)
+  augment.py          # StainAugmenter
+  helpers.py

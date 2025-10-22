@@ -68,7 +68,8 @@ Thumbs.db
 # Ignore everything inside images except PNGs
 images/*
 !images/*.png
-
+# Ignore synthetic data and generated images
+synth_data/
 
 # Generated outputs
 outputs/
