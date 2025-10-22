@@ -2,12 +2,6 @@
 
 This repository provides a modular framework for preprocessing, stain augmentation, and automated ground truth mask generation from histopathology images.  It is designed to support the development of machine learning and deep learning models in digital pathology, particularly for H&E-stained tissue sections.
 
-
----
-
-## Overview
-
-Histopathology datasets exhibit significant variation in color, intensity, and texture due to differences in staining, tissue preparation, and scanning conditions.  This project provides preprocessing, color augmentation, and segmentation utilities that help generate high-quality training masks for model development and evaluation.
 ---
 
 ## Usage
