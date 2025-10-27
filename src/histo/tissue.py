@@ -5,7 +5,6 @@ from typing import List
 import cv2
 import numpy as np
 
-
 @dataclass
 class SegmentationResult:
     mask: np.ndarray            # uint8, 0/255

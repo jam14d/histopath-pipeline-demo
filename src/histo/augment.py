@@ -47,3 +47,5 @@ class StainAugmenter:
             aug = self._augment_fn(img_rgb, mask_out=m, **kwargs)
             out.append(aug.astype(np.uint8))
         return out
+
+

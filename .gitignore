@@ -31,9 +31,9 @@ var/
 *.egg
 MANIFEST
 
-# Jupyter
-.ipynb_checkpoints
-*.ipynb
+# # Jupyter
+# .ipynb_checkpoints
+# *.ipynb
 
 # Unit test / coverage reports
 htmlcov/
