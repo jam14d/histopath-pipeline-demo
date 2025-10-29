@@ -19,6 +19,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt 
 
 from skimage import io as skio, measure, exposure, filters, morphology, transform
 from skimage.color import rgb2hed
@@ -197,7 +198,6 @@ def area_filter_labels(labels: np.ndarray, min_area: Optional[int], max_area: Op
 
 
 # Global thresholds, binning, H-score
-
 def compute_global_thresholds(all_nuc_od: np.ndarray, q1: float, q2: float, min_od: float) -> Tuple[float, float]:
     mask = np.isfinite(all_nuc_od) & (all_nuc_od > min_od)
     vals = all_nuc_od[mask]
@@ -257,7 +257,6 @@ def hscore_from_bins(bins: np.ndarray, weights: Tuple[int,int,int]) -> Tuple[flo
     }
 
 
-
 # Overlays & composites
 def qupath_palette() -> Dict[int, Tuple[float, float, float]]:
     return {
@@ -266,7 +265,6 @@ def qupath_palette() -> Dict[int, Tuple[float, float, float]]:
         2: (1.0, 0.8, 0.2),    # med
         3: (1.0, 0.2, 0.2),    # high
     }
-
 
 
 def labels_to_binmap(labels: np.ndarray, label_ids: np.ndarray, bins: np.ndarray) -> np.ndarray:
@@ -304,9 +302,59 @@ def render_qupath_overlay(rgb01: np.ndarray, binmap: np.ndarray, alpha: float, d
     if draw_boundaries:
         bounds = find_boundaries(binmap >= 0, mode="outer")
         overlay[bounds] = np.clip(overlay[bounds] * 0.25 + 0.75, 0, 1)
-    return np.clip(overlay, 0, 1)
+    return np.clip(overlay, 0, 1)\
+    
+def plot_dab_histogram(all_nuc_od: np.ndarray, min_od: float, t1: float, t2: float, out_dir: Path) -> Path:
+    """
+    Plot histogram of per-nucleus mean DAB OD across the dataset.
+    Shows min-od (negative/positive gate) and global t1/t2 (weak/med/strong splits).
+    """
+    vals = all_nuc_od[np.isfinite(all_nuc_od)]
+    if vals.size == 0:
+        raise ValueError("No valid DAB OD values to plot.")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.hist(vals, bins=100, edgecolor="none", alpha=0.85)
+    ax.axvline(min_od, color="C0", linestyle="--", label=f"min-od={min_od:.3f}")
+    ax.axvline(t1,     color="C1", linestyle="--", label=f"t1={t1:.3f}")
+    ax.axvline(t2,     color="C3", linestyle="--", label=f"t2={t2:.3f}")
+    ax.set_xlabel("Per-nucleus mean DAB OD")
+    ax.set_ylabel("Count")
+    ax.set_title("DAB OD distribution (all nuclei)")
+    ax.legend()
+    out_path = out_dir / "dab_histogram.png"
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
 
+def plot_dab_cdf(all_nuc_od: np.ndarray, min_od: float, t1: float, t2: float, out_dir: Path) -> Path:
+    """
+    Plot cumulative distribution (CDF) of per-nucleus mean DAB OD.
+    Visualizes what fraction of nuclei lie below each OD level.
+    """
+    vals = all_nuc_od[np.isfinite(all_nuc_od)]
+    if vals.size == 0:
+        raise ValueError("No valid DAB OD values to plot.")
 
+    vals_sorted = np.sort(vals)
+    cdf = np.arange(1, len(vals_sorted) + 1) / len(vals_sorted)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(vals_sorted, cdf, color="k", lw=1.5)
+    ax.axvline(min_od, color="C0", linestyle="--", label=f"min-od={min_od:.3f}")
+    ax.axvline(t1, color="C1", linestyle="--", label=f"t1={t1:.3f}")
+    ax.axvline(t2, color="C3", linestyle="--", label=f"t2={t2:.3f}")
+    ax.set_xlabel("Per-nucleus mean DAB OD")
+    ax.set_ylabel("Cumulative fraction")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("Cumulative DAB OD distribution (all nuclei)")
+    ax.legend()
+
+    out_path = out_dir / "dab_cdf.png"
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
 
 
 # Main two-phase pipeline
@@ -315,7 +363,8 @@ def run_global_quantile_pipeline(
     seg_cfg: SegmentationConfig,
     gq_cfg: GlobalQuantileConfig,
     ov_cfg: OverlayConfig,
-    save_side_by_side: bool = True
+    save_side_by_side: bool = True,
+    debug_hist: bool = False,
 ) -> Path:
     paths = ensure_dirs(paths)
     imgs = discover_images(paths.input_dir)
@@ -342,6 +391,13 @@ def run_global_quantile_pipeline(
 
     all_od = np.concatenate(nuc_ods) if nuc_ods else np.array([])
     t1, t2 = compute_global_thresholds(all_od, gq_cfg.q1, gq_cfg.q2, gq_cfg.min_od)
+
+    if debug_hist:
+        hist_path = plot_dab_histogram(all_od, gq_cfg.min_od, t1, t2, paths.output_dir)
+        cdf_path = plot_dab_cdf(all_od, gq_cfg.min_od, t1, t2, paths.output_dir)
+        print(f"[debug] DAB histogram saved to: {hist_path}")
+        print(f"[debug] DAB CDF saved to: {cdf_path}")
+
 
     rows: List[Dict[str, object]] = []
     for p, labels, means, ids in zip(rgb_paths, labels_per_img, nuc_ods, nuc_label_ids):
@@ -423,6 +479,8 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--overlay-boundaries", action="store_true", help="Draw thin boundaries over filled masks")
     ap.add_argument("--side-by-side", dest="side_by_side", action="store_true", help="Save [original|overlay] composite")
     ap.add_argument("--no-side-by-side", dest="side_by_side", action="store_false", help="Do not save composite")
+    ap.add_argument("--debug-hist", action="store_true",
+                help="If set, save a DAB OD histogram (per-nucleus means) with min-od/t1/t2 lines.")
     ap.set_defaults(side_by_side=True)
     return ap
 
@@ -449,7 +507,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     ov_cfg = OverlayConfig(mode=args.overlay, alpha=args.overlay_alpha, draw_boundaries_on_fill=args.overlay_boundaries)
 
     csv_path = run_global_quantile_pipeline(
-        paths, seg_cfg, gq_cfg, ov_cfg, save_side_by_side=args.side_by_side
+        paths, seg_cfg, gq_cfg, ov_cfg, save_side_by_side=args.side_by_side, debug_hist=args.debug_hist,    
     )
     print(f"Wrote: {csv_path}")
 
