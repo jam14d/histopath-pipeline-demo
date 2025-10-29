@@ -512,5 +512,232 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     print(f"Wrote: {csv_path}")
 
 
+# if __name__ == "__main__":
+#     import sys
+#     import argparse
+
+#     # Parse debug-only flags without disturbing your normal CLI
+#     pv = argparse.ArgumentParser(add_help=False)
+#     pv.add_argument("--probvis", action="store_true",
+#                     help="Run a one-off StarDist probability-map visualization and exit.")
+#     pv.add_argument("--probvis-image", type=Path, default=None,
+#                     help="Path to one image to visualize.")
+#     pv.add_argument("--probvis-out", type=Path, default=None,
+#                     help="Output folder (default: alongside the image).")
+#     pv.add_argument("--probvis-alpha", type=float, default=0.45,
+#                     help="Alpha for probability heatmap overlay.")
+#     # (Optional) a few SD knobs just for the debug call
+#     pv.add_argument("--probvis-model", type=str, default="2D_versatile_fluo")
+#     pv.add_argument("--probvis-sd-input", choices=["gray","hematoxylin"], default="hematoxylin")
+#     pv.add_argument("--probvis-rescale", type=float, default=None)
+#     pv.add_argument("--probvis-clahe", action="store_true")
+#     pv.add_argument("--probvis-median-radius", type=int, default=None)
+#     pv.add_argument("--probvis-prob-thresh", type=float, default=0.5)
+#     pv.add_argument("--probvis-nms-thresh", type=float, default=0.3)
+#     dbg, remaining = pv.parse_known_args(sys.argv[1:])
+
+#     if not dbg.probvis:
+#         # run your normal pipeline
+#         main(remaining)
+#         sys.exit(0)
+
+#     # prob map debug
+#     if dbg.probvis_image is None:
+#         pv.error("--probvis-image is required when using --probvis")
+
+#     def _u8(x: np.ndarray) -> np.ndarray:
+#         return (np.clip(x, 0, 1) * 255).astype(np.uint8)
+
+#     def _overlay(rgb01: np.ndarray, heat01_rgb: np.ndarray, alpha: float) -> np.ndarray:
+#         return np.clip((1.0 - alpha) * rgb01 + alpha * heat01_rgb, 0, 1)
+
+#     # Build minimal segmentation config ad-hoc run
+#     seg_cfg = SegmentationConfig(
+#         model_name=dbg.probvis_model,
+#         prob_thresh=dbg.probvis_prob_thresh,
+#         nms_thresh=dbg.probvis_nms_thresh,
+#         tile=None,
+#         sd_norm_percentiles=None,   # minimal normalization
+#         sd_input=dbg.probvis_sd_input,
+#         rescale=dbg.probvis_rescale,
+#         use_clahe=dbg.probvis_clahe,
+#         median_radius=dbg.probvis_median_radius,
+#         min_area=None,
+#         max_area=None,
+#     )
+
+#     # I/O
+#     img_path: Path = dbg.probvis_image
+#     out_dir: Path = dbg.probvis_out or (img_path.parent / f"{img_path.stem}_PROBVIS")
+#     out_dir.mkdir(parents=True, exist_ok=True)
+
+#     # Load data + model
+#     rgb = read_image_rgb01(img_path)
+#     model = load_stardist_model(seg_cfg.model_name)
+
+#     # Get the exact SD input and probability map
+#     im = preprocess_for_stardist(rgb, seg_cfg)
+#     # prob/dist via StarDist; index [0] = prob
+#     if seg_cfg.rescale and seg_cfg.rescale != 1.0:
+#         im_small = transform.rescale(im, seg_cfg.rescale, order=1, anti_aliasing=True, channel_axis=None, preserve_range=True)
+#         prob_small, _ = model.predict(im_small)
+#         prob = transform.resize(prob_small, im.shape, order=1, anti_aliasing=True, preserve_range=True).astype(np.float32)
+#     else:
+#         prob, _ = model.predict(im)
+#         prob = prob.astype(np.float32)
+
+#     # Colorize probability map (viridis), normalize 0..1
+#     p = prob.copy()
+#     p -= p.min()
+#     p /= (p.max() - p.min() + 1e-8)
+#     cmap = plt.get_cmap("viridis")
+#     p_rgb = cmap(p)[..., :3]  # RGBA->RGB, still 0..1
+
+#     # Labels for boundaries (use your existing instance predictor)
+#     labels = stardist_segment(rgb, model, seg_cfg)
+#     if isinstance(labels, tuple):  # in case stardist_segment returns (labels, prob)
+#         labels = labels[0]
+#     labels = labels.astype(np.int32)
+
+#     # Save outputs
+#     prob_path = out_dir / f"{img_path.stem}_prob.png"
+#     skio.imsave(str(prob_path), _u8(p_rgb))
+
+#     overlay = _overlay(rgb, p_rgb, dbg.probvis_alpha)
+#     ov_path = out_dir / f"{img_path.stem}_prob_overlay.png"
+#     skio.imsave(str(ov_path), _u8(overlay))
+
+#     bounds = find_boundaries(labels > 0, mode="outer")
+#     overlay_b = rgb.copy()
+#     overlay_b[bounds] = np.clip(overlay_b[bounds] * 0.2 + 0.8, 0, 1)
+#     b_path = out_dir / f"{img_path.stem}_bounds.png"
+#     skio.imsave(str(b_path), _u8(overlay_b))
+
+#     print(f"[probvis] Saved:\n  {prob_path}\n  {ov_path}\n  {b_path}")
+#     sys.exit(0)
+
+# -------------------------------------------------------------------
+# Batch probability-map visualizer for multiple random images
+# Usage:
+#   python hdab_stardist_hscore_global_quant.py \
+#       --probvis-batch --probvis-dir /path/to/images --probvis-out /tmp/debug --n 3
+
 if __name__ == "__main__":
-    main()
+    import sys, random, argparse
+
+    pv = argparse.ArgumentParser(add_help=False)
+    pv.add_argument("--probvis-batch", action="store_true",
+                    help="Run probability map visualization on N random images from a directory.")
+    pv.add_argument("--probvis-dir", type=Path, default=None,
+                    help="Input directory containing images.")
+    pv.add_argument("--probvis-out", type=Path, default=None,
+                    help="Output directory (default: 'PROBVIS' inside input dir).")
+    pv.add_argument("-n", type=int, default=3,
+                    help="Number of random images to visualize (default=3).")
+    pv.add_argument("--probvis-alpha", type=float, default=0.45,
+                    help="Alpha for probability overlay.")
+    pv.add_argument("--probvis-model", type=str, default="2D_versatile_fluo")
+    pv.add_argument("--probvis-sd-input", choices=["gray","hematoxylin"], default="hematoxylin")
+    pv.add_argument("--probvis-rescale", type=float, default=None)
+    pv.add_argument("--probvis-clahe", action="store_true")
+    pv.add_argument("--probvis-median-radius", type=int, default=None)
+    pv.add_argument("--probvis-prob-thresh", type=float, default=0.5)
+    pv.add_argument("--probvis-nms-thresh", type=float, default=0.3)
+    dbg, remaining = pv.parse_known_args(sys.argv[1:])
+
+    if not dbg.probvis_batch:
+        # fall back to normal execution
+        main(remaining)
+        sys.exit(0)
+
+    if dbg.probvis_dir is None:
+        pv.error("--probvis-dir is required when using --probvis-batch")
+
+    # ---------- helpers ----------
+    def _u8(x: np.ndarray) -> np.ndarray:
+        return (np.clip(x, 0, 1) * 255).astype(np.uint8)
+
+    def _overlay(rgb01: np.ndarray, heat01_rgb: np.ndarray, alpha: float) -> np.ndarray:
+        return np.clip((1.0 - alpha) * rgb01 + alpha * heat01_rgb, 0, 1)
+
+    def _match_shape(img: np.ndarray, ref: np.ndarray) -> np.ndarray:
+        """Resize img (H,W[,C]) to match ref.shape using bilinear resampling, keep 0..1 range."""
+        if img.shape == ref.shape:
+            return img.astype(np.float32, copy=False)
+        out = transform.resize(
+            img, ref.shape, order=1, anti_aliasing=True, preserve_range=True
+        ).astype(np.float32)
+        return np.clip(out, 0, 1)
+
+    # ---------- config & model ----------
+    seg_cfg = SegmentationConfig(
+        model_name=dbg.probvis_model,
+        prob_thresh=dbg.probvis_prob_thresh,
+        nms_thresh=dbg.probvis_nms_thresh,
+        tile=None,
+        sd_norm_percentiles=None,
+        sd_input=dbg.probvis_sd_input,
+        rescale=dbg.probvis_rescale,
+        use_clahe=dbg.probvis_clahe,
+        median_radius=dbg.probvis_median_radius,
+    )
+    model = load_stardist_model(seg_cfg.model_name)
+
+    # ---------- select images ----------
+    imgs = discover_images(dbg.probvis_dir)
+    if len(imgs) == 0:
+        print("No images found.")
+        sys.exit(1)
+
+    chosen = random.sample(imgs, min(dbg.n, len(imgs)))
+    out_dir = dbg.probvis_out or (dbg.probvis_dir / "PROBVIS")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[probvis-batch] Selected {len(chosen)} images.")
+    for p in chosen:
+        print(f"[probvis] processing {p.name}")
+        rgb = read_image_rgb01(p).astype(np.float32)
+
+        # preprocess & probability map
+        im = preprocess_for_stardist(rgb, seg_cfg)
+        if seg_cfg.rescale and seg_cfg.rescale != 1.0:
+            im_small = transform.rescale(im, seg_cfg.rescale, order=1, anti_aliasing=True,
+                                         channel_axis=None, preserve_range=True)
+            prob_small, _ = model.predict(im_small)
+            prob = transform.resize(prob_small, im.shape, order=1, anti_aliasing=True,
+                                    preserve_range=True).astype(np.float32)
+        else:
+            prob, _ = model.predict(im)
+            prob = prob.astype(np.float32)
+
+        # normalize + colorize prob
+        pnorm = prob - prob.min()
+        pnorm /= (pnorm.max() - pnorm.min() + 1e-8)
+        cmap = plt.get_cmap("viridis")
+        p_rgb = cmap(pnorm)[..., :3].astype(np.float32)  # 0..1
+
+        # match sizes to RGB for blending
+        p_rgb = _match_shape(p_rgb, rgb)
+
+        # labels & boundaries (for thin edges)
+        labels = stardist_segment(rgb, model, seg_cfg)
+        if isinstance(labels, tuple):  # backward compatible if function returns (labels, prob)
+            labels = labels[0]
+        labels = labels.astype(np.int32)
+        bounds = find_boundaries(labels > 0, mode="outer")
+        if bounds.shape != rgb.shape[:2]:
+            bounds = transform.resize(bounds.astype(float), rgb.shape[:2],
+                                      order=0, anti_aliasing=False, preserve_range=True) > 0.5
+
+        # overlay
+        overlay = _overlay(rgb, p_rgb, dbg.probvis_alpha)
+        overlay[bounds] = np.clip(overlay[bounds] * 0.2 + 0.8, 0, 1)
+
+        # save outputs
+        base = p.stem
+        skio.imsave(str(out_dir / f"{base}_prob.png"), _u8(p_rgb))
+        skio.imsave(str(out_dir / f"{base}_prob_overlay.png"), _u8(overlay))
+        print(f"  saved {base}_prob.png and {base}_prob_overlay.png")
+
+    print(f"[probvis-batch] done. results in {out_dir}")
+    sys.exit(0)
