@@ -268,6 +268,14 @@ def render_qupath_overlay(rgb01: np.ndarray, binmap: np.ndarray, alpha: float, d
 
 
 # Debug helpers (pure side effects; gated by DebugVisConfig)
+
+def _rescale01(x: np.ndarray) -> np.ndarray:
+    x = x.astype(np.float32)
+    x = x - np.nanmin(x)
+    denom = np.nanmax(x) + 1e-8
+    return x / denom
+
+
 def _u8(x: np.ndarray) -> np.ndarray:
     return (np.clip(x, 0, 1) * 255).astype(np.uint8)
 
@@ -307,7 +315,20 @@ def maybe_save_debug(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if vis.save_input:
+        # already saving the StarDist input as RGB
         skio.imsave(str(out_dir / f"{stem}_sdinput.png"), _u8(np.repeat(sd_input01[..., None], 3, axis=-1)))
+
+        # NEW: save Hematoxylin (H) and DAB (D) components
+        h = hematoxylin_channel(rgb)       # H channel (nuclei)
+        d = rgb_to_dab_od(rgb)             # D channel (DAB optical density)
+
+        # Rescale to 0..1 for visualization; flip D for nicer viewing (bright=more DAB)
+        h_viz = _rescale01(h)
+        d_viz = _rescale01(-d)
+
+        # Save as 3-channel grayscale PNGs for consistency
+        skio.imsave(str(out_dir / f"{stem}_H.png"), _u8(np.repeat(h_viz[..., None], 3, axis=-1)))
+        skio.imsave(str(out_dir / f"{stem}_D.png"), _u8(np.repeat(d_viz[..., None], 3, axis=-1)))
 
     if vis.save_prob:
         heat = colorize_probability(prob01)
