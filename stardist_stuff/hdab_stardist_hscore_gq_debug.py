@@ -19,6 +19,7 @@ python hdab_stardist_hscore_gq_debug.py \
 """
 
 from __future__ import annotations
+from time import time
 
 import argparse
 from dataclasses import dataclass
@@ -111,8 +112,6 @@ def read_image_rgb01(path: Path) -> np.ndarray:
     return np.clip(arr, 0, 1)
 
 # Stains & measures
-
-
 def rgb_to_dab_od(rgb01: np.ndarray) -> np.ndarray:
     hed = rgb2hed(np.clip(rgb01, 0, 1))
     return hed[..., 2]
@@ -133,8 +132,6 @@ def per_label_mean_with_ids(values: np.ndarray, labels: np.ndarray) -> Tuple[np.
 
 
 # StarDist + preprocessing
-
-
 def load_stardist_model(name: str) -> StarDist2D:
     return StarDist2D.from_pretrained(name) if "/" not in name else StarDist2D(None, name=name)
 
@@ -205,8 +202,6 @@ def area_filter_labels(labels: np.ndarray, min_area: Optional[int], max_area: Op
 
 
 # Global thresholds, binning, H-score
-
-
 def compute_global_thresholds(all_nuc_od: np.ndarray, q1: float, q2: float, min_od: float) -> Tuple[float, float]:
     mask = np.isfinite(all_nuc_od) & (all_nuc_od > min_od)
     vals = all_nuc_od[mask]
@@ -273,8 +268,6 @@ def render_qupath_overlay(rgb01: np.ndarray, binmap: np.ndarray, alpha: float, d
 
 
 # Debug helpers (pure side effects; gated by DebugVisConfig)
-
-
 def _u8(x: np.ndarray) -> np.ndarray:
     return (np.clip(x, 0, 1) * 255).astype(np.uint8)
 
@@ -362,8 +355,36 @@ def plot_dab_cdf(all_nuc_od: np.ndarray, min_od: float, t1: float, t2: float, ou
     return out_path
 
 
-# Main pipeline
+def compute_segmentation_metrics(labels: np.ndarray, prob_map: np.ndarray) -> Dict[str, float]:
+    """Compute quick quality metrics for each image."""
+    regions = measure.regionprops(labels)
+    if not regions:
+        return {
+            "mean_prob": 0.0, "std_prob": np.nan,
+            "n_nuclei": 0, "mean_area": np.nan, "median_circularity": np.nan
+        }
 
+    # Compute per-nucleus mean prob directly
+    props = measure.regionprops_table(labels, intensity_image=prob_map,
+                                      properties=('label', 'mean_intensity', 'area', 'perimeter'))
+    probs = np.asarray(props["mean_intensity"])
+    areas = np.asarray(props["area"])
+    perim = np.asarray(props["perimeter"])
+    circ = 4 * np.pi * areas / (perim ** 2 + 1e-8)
+
+    return {
+        "mean_prob": float(np.mean(probs)),
+        "std_prob": float(np.std(probs)),
+        "n_nuclei": len(probs),
+        "mean_area": float(np.mean(areas)),
+        "median_circularity": float(np.median(circ))
+    }
+
+
+
+
+
+# Main pipeline
 def run_global_quantile_pipeline(
     paths: Paths,
     seg_cfg: SegmentationConfig,
@@ -385,13 +406,22 @@ def run_global_quantile_pipeline(
     nuc_label_ids: List[np.ndarray] = []
     labels_per_img: List[np.ndarray] = []
     rgb_paths: List[Path] = []
+    prob_maps: List[np.ndarray] = []
+    runtimes: List[float] = []
+    image_mpx: List[float] = []   # megapixels for runtime normalization
 
     n_vis = 0
     for p in imgs:
         rgb = read_image_rgb01(p)
 
         # segmentation + prob + sd_input (DRY, single call)
+        t0 = time()
         labels, prob01, sd_input01 = stardist_segment(rgb, model, seg_cfg)
+        runtime = time() - t0
+        prob_maps.append(prob01)
+        runtimes.append(runtime)
+        image_mpx.append((rgb.shape[0] * rgb.shape[1]) / 1e6)
+
         labels = area_filter_labels(labels, seg_cfg.min_area, seg_cfg.max_area)
 
         # per-nucleus DAB OD
@@ -420,15 +450,39 @@ def run_global_quantile_pipeline(
 
     # Per-image results + overlays
     rows: List[Dict[str, object]] = []
-    for p, labels, means, ids in zip(rgb_paths, labels_per_img, nuc_ods, nuc_label_ids):
+    #for p, labels, means, ids in zip(rgb_paths, labels_per_img, nuc_ods, nuc_label_ids):
+    for p, labels, means, ids, prob01, runtime, mpx in zip(
+        rgb_paths, labels_per_img, nuc_ods, nuc_label_ids, prob_maps, runtimes, image_mpx
+    ):
         bins = bin_od(means, t1, t2, gq_cfg.min_od)
         h, details = hscore_from_bins(bins, gq_cfg.weights)
+    
+        prob_stats = compute_segmentation_metrics(labels, prob_map=prob01)
 
+
+        # row = {
+        #     "file": p.name,
+        #     "n_nuclei": details["n_nuclei"],
+        #     "p_low": details["p_low"], "p_med": details["p_med"], "p_high": details["p_high"],
+        #     "hscore_0_300": h,
+        #     "global_t1": t1, "global_t2": t2,
+        #     "q1_percent": gq_cfg.q1, "q2_percent": gq_cfg.q2,
+        #     "min_od": gq_cfg.min_od,
+        #     "sd_input": seg_cfg.sd_input,
+        #     "rescale": seg_cfg.rescale if seg_cfg.rescale is not None else 1.0,
+        #     "min_area": seg_cfg.min_area, "max_area": seg_cfg.max_area,
+        # }
         row = {
             "file": p.name,
-            "n_nuclei": details["n_nuclei"],
-            "p_low": details["p_low"], "p_med": details["p_med"], "p_high": details["p_high"],
             "hscore_0_300": h,
+            "p_low": details["p_low"], "p_med": details["p_med"], "p_high": details["p_high"],
+            "n_nuclei": prob_stats["n_nuclei"],
+            "mean_prob": prob_stats["mean_prob"],
+            "std_prob": prob_stats["std_prob"],
+            "mean_area": prob_stats["mean_area"],
+            "median_circularity": prob_stats["median_circularity"],
+            "runtime_sec": runtime,
+            "runtime_s_per_mp": runtime / max(mpx, 1e-9),  # guard divide-by-zero just in case
             "global_t1": t1, "global_t2": t2,
             "q1_percent": gq_cfg.q1, "q2_percent": gq_cfg.q2,
             "min_od": gq_cfg.min_od,
@@ -436,6 +490,7 @@ def run_global_quantile_pipeline(
             "rescale": seg_cfg.rescale if seg_cfg.rescale is not None else 1.0,
             "min_area": seg_cfg.min_area, "max_area": seg_cfg.max_area,
         }
+
         rows.append(row)
 
         if ov_cfg.mode != "none":
@@ -456,7 +511,6 @@ def run_global_quantile_pipeline(
 
 
 # CLI
-
 def parse_tile(s: Optional[str]) -> Optional[Tuple[int, int]]:
     if not s:
         return None
