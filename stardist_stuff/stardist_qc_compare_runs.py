@@ -9,6 +9,16 @@ Also writes summary CSVs with Coefficient of Variation, skew, outlier counts, an
 
 Usage:
   python stardist_qc_compare_runs.py --out /path/to/out runA.csv runB.csv [runC.csv ...]
+
+
+ Example: 
+python stardist_qc_compare_runs.py \
+  --out /Users/jamieannemortel/Documents/QC_out_2 \
+  /Users/jamieannemortel/Documents/IHC_out_v2/hscore_global_quantile_results_runa.csv \
+  /Users/jamieannemortel/Documents/IHC_out_v7/hscore_global_quantile_results_runb.csv \
+  /Users/jamieannemortel/Documents/IHC_out_vAB/hscore_global_quantile_results_runab.csv
+
+ 
 """
 import argparse
 from pathlib import Path
@@ -43,21 +53,37 @@ def count_runchart_violations(y):
     upper = m + 2*s; lower = m - 2*s
     return int(np.sum((y > upper) | (y < lower)))
 
+# def pretty_run_label(raw: str) -> str:
+#     s = raw.strip().lower()
+#     # Common cases: "runa", "runb", "runc", etc.
+#     m = re.fullmatch(r"run([a-z])", s)
+#     if m:
+#         return f"Run {m.group(1).upper()}"
+#     # "v3", "v4", "v7" -> "Run V3" etc.
+#     m = re.fullmatch(r"v(\d+)", s)
+#     if m:
+#         return f"Run V{m.group(1)}"
+#     # "run_a", "run-a" -> "Run A"
+#     m = re.fullmatch(r"run[_-]?([a-z])", s)
+#     if m:
+#         return f"Run {m.group(1).upper()}"
+#     # Fall back to title-cased
+#     return raw
+
 def pretty_run_label(raw: str) -> str:
     s = raw.strip().lower()
-    # Common cases: "runa", "runb", "runc", etc.
-    m = re.fullmatch(r"run([a-z])", s)
+
+    # Matches "runa", "runab", "run_a", "run-ab"
+    m = re.fullmatch(r"run[_-]?([a-z]+)", s)
     if m:
         return f"Run {m.group(1).upper()}"
-    # "v3", "v4", "v7" -> "Run V3" etc.
+
+    # Matches "v3", "v10", etc.
     m = re.fullmatch(r"v(\d+)", s)
     if m:
         return f"Run V{m.group(1)}"
-    # "run_a", "run-a" -> "Run A"
-    m = re.fullmatch(r"run[_-]?([a-z])", s)
-    if m:
-        return f"Run {m.group(1).upper()}"
-    # Fall back to title-cased
+
+    # Default fallback
     return raw
 
 def load_runs(files):
